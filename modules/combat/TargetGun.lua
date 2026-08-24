@@ -1,7 +1,7 @@
--- TargetGun: ragebot gun "inventado" pa' el juego. El silent redirect muere (server valida la pos del fire).
--- Truco: en vez de redirigir el tiro (rechazado), GATHER el target ENFRENTE de tu camara + fire MouseEvent al
--- crosshair-forward (raycast camara = pos VALIDA que pega al target ahi). No es redirect -> el server acepta.
--- Si el gun daña clientside como el melee -> registra. Experimental (el user testea). FF/team check.
+-- TargetGun: ragebot gun. Las balas = daño SERVER-SIDE (proyectil desde tu muzzle server -> target server).
+-- Silent redirect muere (server valida hitPos vs tu pos). Metodo inventado: en vez de mover el target, DESYNC
+-- tu server-pos AL target -> el bullet spawnea desde tu muzzle spoofeado (en el target) + fire MouseEvent(target)
+-- = point-blank VALIDO -> la bala pega. Cliente queda quieto (hook __index). Es el melee-gather al reves.
 return function(U)
     local Players    = game:GetService("Players")
     local RunService = game:GetService("RunService")
@@ -9,22 +9,23 @@ return function(U)
     local Combat = U.Tabs.Combat
     local F = U.Flags
     local LP = Players.LocalPlayer
+    local Spoof = U.Services.Spoof
 
-    local Sec = Combat:AddSection("Target Gun", "Ragebot gun: gather target + fire (experimental)")
+    local Sec = Combat:AddSection("Target Gun", "Ragebot gun: desync-to-target + fire (bullets serverside)")
     local Pan = Sec:AddPanel("Target Gun", { Column = 1 })
     Pan:AddLabel("Master", { Header = true })
     Pan:AddToggle("TGun", { Text = "Enabled", Default = false,
-        Tooltip = "Trae el target enfrente + dispara al crosshair (pos valida). Rapidfire" })
+        Tooltip = "Desync tu server-pos al target -> fire point-blank valido -> la bala pega. Vos quedas quieto" })
         :AddKeybind({ Default = Enum.KeyCode.N })
+    Pan:AddDropdown("TGunSelect", { Text = "Selection", Values = { "Nearest Mouse", "Nearest Distance", "Lowest HP" }, Default = "Nearest Mouse" })
+    Pan:AddDropdown("TGunHitbox", { Text = "Hitbox", Values = { "HumanoidRootPart", "Head", "UpperTorso" }, Default = "HumanoidRootPart" })
     Pan:AddToggle("TGunTeamCheck", { Text = "Team Check", Default = false })
     Pan:AddToggle("TGunFFCheck", { Text = "ForceField Check", Default = true })
-    Pan:AddSlider("TGunDist", { Text = "Front Distance", Min = 3, Max = 30, Default = 8, Suffix = "studs",
-        Tooltip = "Que tan enfrente de tu camara traer el target" })
-    Pan:AddSlider("TGunRate", { Text = "Fire Interval", Min = 0.05, Max = 1, Default = 0.1, Decimals = 2, Suffix = "s",
-        Tooltip = "0 = usa FireRate del arma. Muy rapido puede lockear" })
+    Pan:AddSlider("TGunRate", { Text = "Fire Interval", Min = 0.05, Max = 1, Default = 0.1, Decimals = 2, Suffix = "s" })
     Pan:AddToggle("TGunUseWeaponRate", { Text = "Use Weapon FireRate", Default = true })
+    Pan:AddSlider("TGunOffset", { Text = "Offset From Target", Min = 0, Max = 15, Default = 4, Suffix = "studs",
+        Tooltip = "Que tan lejos del target te spoofeas (0=dentro, chico=point-blank con LOS)" })
 
-    -- gun equipado = Tool con MouseEvent + Configuration.BulletSpeed (los melee NO tienen BulletSpeed)
     local function equippedGun()
         local char = LP.Character
         if not char then return end
@@ -36,10 +37,13 @@ return function(U)
         end
     end
 
-    local function nearestToMouse()
+    -- target por Selection (Nearest Mouse SIN offscreen / Distance / Lowest HP). Devuelve char + hitbox part.
+    local function pickTarget()
         local cam = workspace.CurrentCamera
         local mp = UIS:GetMouseLocation()
-        local best, bd
+        local mode = F.TGunSelect or "Nearest Mouse"
+        local part = F.TGunHitbox or "HumanoidRootPart"
+        local best, bestScore, bestChar
         for _, plr in ipairs(Players:GetPlayers()) do
             if plr ~= LP then
                 local c = plr.Character
@@ -47,47 +51,43 @@ return function(U)
                 local hum = c and c:FindFirstChildOfClass("Humanoid")
                 local ff = F.TGunFFCheck ~= false and c and c:FindFirstChildOfClass("ForceField")
                 if hrp and hum and hum.Health > 0 and not ff and not (F.TGunTeamCheck and LP.Team and plr.Team == LP.Team) then
-                    local sp = cam:WorldToViewportPoint(hrp.Position)
-                    local d = (Vector2.new(sp.X, sp.Y) - mp).Magnitude
-                    if not bd or d < bd then bd, best = d, c end
+                    local score
+                    if mode == "Nearest Distance" then
+                        score = cam and (cam.CFrame.Position - hrp.Position).Magnitude or 0
+                    elseif mode == "Lowest HP" then
+                        score = hum.Health
+                    else
+                        local sp = cam:WorldToViewportPoint(hrp.Position)
+                        score = (Vector2.new(sp.X, sp.Y) - mp).Magnitude
+                    end
+                    if not bestScore or score < bestScore then
+                        bestScore = score; bestChar = c; best = c:FindFirstChild(part) or hrp
+                    end
                 end
             end
         end
-        return best
-    end
-
-    -- trae el target enfrente de la camara (CanCollide off). El fire va al crosshair -> pega al target ahi.
-    local function bringToFront(char, dist)
-        local cam = workspace.CurrentCamera
-        local thrp = char and char:FindFirstChild("HumanoidRootPart")
-        if not (cam and thrp) then return end
-        local point = cam.CFrame.Position + cam.CFrame.LookVector * dist
-        pcall(function()
-            for _, p in ipairs(char:GetChildren()) do if p:IsA("BasePart") then p.CanCollide = false end end
-            thrp.CFrame = CFrame.new(point)
-        end)
-    end
-
-    -- pos del fire = hit del raycast camara-centro (VALIDA, misma que el client legit). Pega al target enfrente.
-    local function crosshairHit(gun)
-        local cam = workspace.CurrentCamera
-        local cfg = gun:FindFirstChild("Configuration")
-        local range = (cfg and cfg:FindFirstChild("BulletRange") and cfg.BulletRange.Value) or 800
-        local ray = cam:ViewportPointToRay(cam.ViewportSize.X / 2, cam.ViewportSize.Y / 2)
-        local rp = RaycastParams.new(); rp.FilterType = Enum.RaycastFilterType.Exclude
-        rp.FilterDescendantsInstances = { LP.Character, cam }
-        local res = workspace:Raycast(ray.Origin, ray.Direction * range, rp)
-        return res and res.Position or (ray.Origin + ray.Direction * range)
+        return bestChar, best
     end
 
     local acc = 0
+    local wasActive = false
     local driver = RunService.Heartbeat:Connect(function(dt)
-        if not (F.TGun == true) then acc = 0; return end
+        if not (F.TGun == true) then
+            if wasActive then wasActive = false; pcall(Spoof.stop) end
+            return
+        end
         local gun = equippedGun()
         if not gun then return end
-        local target = nearestToMouse()
-        if not target then return end
-        bringToFront(target, F.TGunDist or 8)
+        local char, hitbox = pickTarget()
+        if not (char and hitbox) then return end
+        local thrp = char:FindFirstChild("HumanoidRootPart") or hitbox
+        -- desync nuestra server-pos cerca del target (offset hacia la camara = LOS + point-blank)
+        local cam = workspace.CurrentCamera
+        local dir = cam and (cam.CFrame.Position - thrp.Position)
+        dir = (dir and dir.Magnitude > 1 and dir.Unit) or Vector3.new(0, 0, 1)
+        local spoofPos = thrp.Position + dir * (F.TGunOffset or 4)
+        Spoof.desyncTo(CFrame.lookAt(spoofPos, hitbox.Position), false)
+        wasActive = true
         acc = acc + dt
         local interval = F.TGunUseWeaponRate ~= false
             and ((gun:FindFirstChild("Configuration") and gun.Configuration:FindFirstChild("FireRate") and gun.Configuration.FireRate.Value) or 0.2)
@@ -96,10 +96,13 @@ return function(U)
         if acc < interval then return end
         acc = 0
         local me = gun:FindFirstChild("MouseEvent")
-        if me then pcall(function() me:FireServer(crosshairHit(gun)) end) end
+        if me then pcall(function() me:FireServer(hitbox.Position) end) end
     end)
 
     if U.Registry then
-        U.Registry.Add("TargetGun", { Unload = function() if driver then driver:Disconnect() end end })
+        U.Registry.Add("TargetGun", { Unload = function()
+            if driver then driver:Disconnect() end
+            pcall(Spoof.stop)
+        end })
     end
 end
