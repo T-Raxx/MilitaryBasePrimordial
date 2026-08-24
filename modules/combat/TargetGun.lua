@@ -29,6 +29,8 @@ return function(U)
     Pan:AddToggle("TGunPredict", { Text = "Prediction (lead)", Default = true, Tooltip = "Lidera al target (move/fly)" })
     Pan:AddToggle("TGunUsePing", { Text = "Auto Lead (ping)", Default = true, Tooltip = "Lead = tu ping. Off = slider" })
     Pan:AddSlider("TGunLead", { Text = "Lead Time", Min = 0, Max = 0.4, Default = 0.08, Decimals = 3, Suffix = "s" })
+    Pan:AddDropdown("TGunResolver", { Text = "Resolver", Values = { "Off", "Cluster", "Density" }, Default = "Off",
+        Tooltip = "Resuelve la pos real si el target anti-aimea (Cluster=juju, Density=sakura)" })
 
     -- velocidad por player (2 samples)
     local vhist = {}
@@ -124,8 +126,9 @@ return function(U)
             end
             lead = targetVel(plr) * t
         end
-        local aimPos = hitbox.Position + lead
-        local basePos = thrp.Position + lead
+        local resolved = (U.Services.Resolver and U.Services.Resolver.resolvePos(plr, thrp.Position, F.TGunResolver)) or thrp.Position
+        local aimPos = resolved + (hitbox.Position - thrp.Position) + lead
+        local basePos = resolved + lead
         -- desync nuestra server-pos cerca del target (offset hacia la camara = LOS)
         local cam = workspace.CurrentCamera
         local dir = cam and (cam.CFrame.Position - basePos)

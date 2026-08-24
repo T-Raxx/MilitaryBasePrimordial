@@ -23,6 +23,8 @@ return function(U)
     Pan:AddSlider("StrafeSpeed", { Text = "Speed", Min = 1, Max = 40, Default = 20 })
     Pan:AddSlider("StrafeHeight", { Text = "Height", Min = -20, Max = 20, Default = 0, Suffix = "studs" })
     Pan:AddSlider("StrafePredict", { Text = "Predict", Min = 0, Max = 0.5, Default = 0, Decimals = 3, Suffix = "s" })
+    Pan:AddDropdown("StrafeResolver", { Text = "Resolver", Values = { "Off", "Cluster", "Density" }, Default = "Off",
+        Tooltip = "Resuelve la pos real si el target anti-aimea (Cluster=juju void-spam, Density=sakura/Unnamed)" })
     Pan:AddToggle("StrafeWeld", { Text = "Connection Weld (point-blank)", Default = false,
         Tooltip = "PhysicsRepRootPart=target: point-blank sin delay, en vez de orbitar" })
     Pan:AddToggle("StrafeSpectate", { Text = "Spectate Target (mouse-on-target)", Default = true,
@@ -164,7 +166,9 @@ return function(U)
         local tHRP = char and char:FindFirstChild("HumanoidRootPart")
         if not tHRP then hideMarker(); return end
         local now = os.clock()
-        local center = tHRP.Position
+        local plr = Players:GetPlayerFromCharacter(char)
+        local rawPos = tHRP.Position
+        local center = (plr and U.Services.Resolver and U.Services.Resolver.resolvePos(plr, rawPos, F.StrafeResolver)) or rawPos
         local predict = F.StrafePredict or 0
         if predict > 0 then center = center + targetVel(tHRP, tHRP.Position, now) * predict end
 
