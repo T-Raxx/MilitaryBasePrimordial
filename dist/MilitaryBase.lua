@@ -3592,6 +3592,7 @@ return function(U)
     Pan:AddToggle("TMAutoEquip", { Text = "Auto-Equip", Default = true })
     Pan:AddToggle("TMVoidSpoof", { Text = "Void Spoof (unhittable)", Default = true })
     Pan:AddToggle("TMTeamCheck", { Text = "Team Check", Default = false, Tooltip = "Off = cualquier player (cheaters)" })
+    Pan:AddToggle("TMForceField", { Text = "ForceField Check", Default = true, Tooltip = "Salta targets con spawn protection" })
     Pan:AddSlider("TMDist", { Text = "Distance To Tool", Min = 0, Max = 12, Default = 2, Decimals = 1, Suffix = "studs" })
     Pan:AddSlider("TMRate", { Text = "Swing Interval", Min = 0.1, Max = 1, Default = 0.5, Decimals = 2, Suffix = "s" })
 
@@ -3634,7 +3635,8 @@ return function(U)
                 local c = plr.Character
                 local hrp = c and c:FindFirstChild("HumanoidRootPart")
                 local hum = c and c:FindFirstChildOfClass("Humanoid")
-                if hrp and hum and hum.Health > 0 and not (F.TMTeamCheck and LP.Team and plr.Team == LP.Team) then
+                local ff = F.TMForceField ~= false and c:FindFirstChildOfClass("ForceField")
+                if hrp and hum and hum.Health > 0 and not ff and not (F.TMTeamCheck and LP.Team and plr.Team == LP.Team) then
                     local sp = cam:WorldToViewportPoint(hrp.Position)
                     local d = (Vector2.new(sp.X, sp.Y) - mp).Magnitude
                     if not bd or d < bd then bd, best = d, c end
