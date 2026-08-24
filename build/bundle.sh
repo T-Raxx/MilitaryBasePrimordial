@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PUI="$ROOT/../PrimordialUI/dist/PrimordialUI.lua"
 OUT="$ROOT/dist/MilitaryBase.lua"
 # orden importa: Registry antes de los modulos que lo usan; finalize al final
-MODULES=(bootstrap tabs core/Registry services/EntityService services/VelocityService services/AimService services/SpoofService modules/combat/InstantReload modules/combat/Aimbot modules/combat/FireBlink modules/combat/TargetStrafe modules/combat/Autofire modules/combat/MeleeAura modules/visuals/ESP modules/tycoon/AutoBuy modules/tycoon/CrateFarm modules/misc/ClientDesync modules/misc/About finalize)
+MODULES=(bootstrap tabs core/Registry services/EntityService services/VelocityService services/AimService services/SpoofService modules/combat/InstantReload modules/combat/Aimbot modules/combat/FireBlink modules/combat/TargetStrafe modules/combat/Autofire modules/combat/TargetMelee modules/visuals/ESP modules/tycoon/AutoBuy modules/tycoon/CrateFarm modules/tycoon/SoldierFarm modules/misc/ClientDesync modules/misc/About finalize)
 mkdir -p "$ROOT/dist"
 {
   echo "-- MilitaryBasePrimordial bundle (auto-generado) --"

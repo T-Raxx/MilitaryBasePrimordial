@@ -58,6 +58,7 @@ return function(U)
                 else
                     task.wait(0.3)
                 end
+                task.wait(0.1) -- SIEMPRE espera por scan: evita busy-spin cuando no quedan crates = lag/crash
             end
             state.running = false
         end)

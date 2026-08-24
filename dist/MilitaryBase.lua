@@ -3567,42 +3567,35 @@ return function(U)
 end
 
 end)(); __m(U) end
--- ==== modules/combat/MeleeAura ====
+-- ==== modules/combat/TargetMelee ====
 do local __m = (function()
--- MeleeAura: KnifeFire:FireServer() no manda args -> el daño a soldados (clientside) se aplica a tu pos
--- CLIENT real, mientras spoofeamos la server-pos al VOID (2^31 random XYZ) = UNHITTABLE + invisible.
--- Hallazgo del usuario: spoofeado lejos, el cuchillo igual registra kills en soldados, y a vos no te tocan.
--- Combo en un toggle: auto-equip knife + void spoof + KnifeFire spam.
+-- TargetMelee: perfect melee kill a un PLAYER (cheater) FULL SIGILO. Target = nearest-to-mouse (sin offscreen).
+-- Void spoof (unhittable) + GRIP DECOUPLE: desconecta el grip weld + ancla el Handle en el target (Anchored+
+-- Massless) -> el arma va al target SIN afectar el movimiento del personaje NI pelear con la void-spoof (sin
+-- jitter/fling). El player NO se trae al frente = invisible. Fire remote generico. Single-target.
 return function(U)
     local Players    = game:GetService("Players")
     local RunService = game:GetService("RunService")
+    local UIS = game:GetService("UserInputService")
     local Combat = U.Tabs.Combat
     local F = U.Flags
     local LP = Players.LocalPlayer
     local Spoof = U.Services.Spoof
 
-    local Sec = Combat:AddSection("Melee Aura", "Knife farm hit-safe + unhittable (void spoof)")
-    local Pan = Sec:AddPanel("Melee Aura", { Column = 1 })
+    local Sec = Combat:AddSection("Target Melee", "Perfect melee kill a cheaters (sigilo)")
+    local Pan = Sec:AddPanel("Target Melee", { Column = 1 })
     Pan:AddLabel("Master", { Header = true })
-    Pan:AddToggle("MeleeAura", { Text = "Enabled", Default = false, Tooltip = "Spam KnifeFire; daño a soldados en tu pos client" })
-        :AddKeybind({ Default = Enum.KeyCode.V })
-    Pan:AddToggle("MeleeAutoEquip", { Text = "Auto-Equip Knife", Default = true })
-    Pan:AddToggle("MeleeVoidSpoof", { Text = "Void Spoof (unhittable)", Default = true,
-        Tooltip = "Server-pos al void 2^31 random = intocable + invisible mientras atacas" })
-    Pan:AddSlider("MeleeRate", { Text = "Swing Interval", Min = 0.1, Max = 1, Default = 0.7, Decimals = 2, Suffix = "s",
-        Tooltip = "0.7 = debounce del knife. Mas rapido = puede lockear/flagear el server" })
-    Pan:AddToggle("MeleeOnlyWithTarget", { Text = "Only Swing With Target In Range", Default = false })
-    Pan:AddSlider("MeleeRange", { Text = "Target Range", Min = 5, Max = 60, Default = 25, Suffix = "studs" })
-    Pan:AddLabel("Mass Farm", { Header = true })
-    Pan:AddToggle("MeleeGather", { Text = "Gather Soldiers (mass)", Default = false,
-        Tooltip = "Trae los soldados (clientside) al punto de cluster -> KnifeFire los mata a todos" })
-    Pan:AddDropdown("MeleeGatherMethod", { Text = "Gather Method", Values = { "To Me", "Cluster Far" }, Default = "Cluster Far",
-        Tooltip = "To Me=en tu pos. Cluster Far=lejos + mueve el grip/Handle alla (no estorba la vista, full sigilo)" })
-    Pan:AddSlider("MeleeGatherRange", { Text = "Gather Range", Min = 20, Max = 2000, Default = 500, Suffix = "studs" })
-    Pan:AddSlider("MeleeClusterDist", { Text = "Cluster Distance", Min = 50, Max = 1000, Default = 300, Suffix = "studs" })
+    Pan:AddToggle("TMelee", { Text = "Enabled", Default = false,
+        Tooltip = "Ancla el arma al target + fire. El player NO se mueve = sigilo. El cuerpo no se ve afectado" })
+        :AddKeybind({ Default = Enum.KeyCode.B })
+    Pan:AddDropdown("TMWeapon", { Text = "Weapon", Values = { "Knife", "Katana" }, Default = "Knife" })
+    Pan:AddToggle("TMAutoEquip", { Text = "Auto-Equip", Default = true })
+    Pan:AddToggle("TMVoidSpoof", { Text = "Void Spoof (unhittable)", Default = true })
+    Pan:AddToggle("TMTeamCheck", { Text = "Team Check", Default = false, Tooltip = "Off = cualquier player (cheaters)" })
+    Pan:AddDropdown("TMHitbox", { Text = "Hitbox", Values = { "HumanoidRootPart", "Head", "UpperTorso" }, Default = "HumanoidRootPart" })
+    Pan:AddSlider("TMRate", { Text = "Swing Interval", Min = 0.1, Max = 1, Default = 0.5, Decimals = 2, Suffix = "s" })
 
-    -- LCG (Math.random bloqueado) para el void random
-    local brng = 135797531
+    local brng = 246813579
     local function rnd() brng = (brng * 1103515245 + 12345) % 2147483648; return brng / 2147483648 end
     local function rndS() return rnd() * 2 - 1 end
     local function voidCF()
@@ -3611,90 +3604,103 @@ return function(U)
         return CFrame.new(rndS() * B, y, rndS() * B)
     end
 
-    local function knife()
+    local function meleeTool()
+        local name = F.TMWeapon or "Knife"
         for _, src in ipairs({ LP.Character, LP:FindFirstChildOfClass("Backpack") }) do
-            if src then local k = src:FindFirstChild("Knife"); if k then return k end end
+            if src then local t = src:FindFirstChild(name); if t and t:IsA("Tool") then return t end end
         end
     end
-    local function equipKnife()
-        local char = LP.Character; local k = knife()
-        if char and k and k.Parent ~= char then
+    local function equipMelee()
+        local char = LP.Character; local t = meleeTool()
+        if char and t and t.Parent ~= char then
             local h = char:FindFirstChildOfClass("Humanoid")
-            if h then pcall(function() h:EquipTool(k) end) end
+            if h then pcall(function() h:EquipTool(t) end) end
         end
-        return char and char:FindFirstChild("Knife")
+        return char and char:FindFirstChild(F.TMWeapon or "Knife")
     end
-    local function targetInRange(range)
-        local hrp = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
-        if not hrp then return false end
+    local function fireRemote(tool)
+        for _, c in ipairs(tool:GetChildren()) do
+            if c:IsA("RemoteEvent") and c.Name ~= "PlayerCheck" then return c end
+        end
+    end
+
+    -- target = player nearest al MOUSE, SIN check offscreen (Z ignorado)
+    local function nearestToMouse()
+        local cam = workspace.CurrentCamera
+        local mp = UIS:GetMouseLocation()
+        local part = F.TMHitbox or "HumanoidRootPart"
+        local best, bd
         for _, plr in ipairs(Players:GetPlayers()) do
             if plr ~= LP then
                 local c = plr.Character
-                local r = c and c:FindFirstChild("HumanoidRootPart")
-                local h = c and c:FindFirstChildOfClass("Humanoid")
-                if r and h and h.Health > 0 and (r.Position - hrp.Position).Magnitude <= range
-                    and not (LP.Team and plr.Team == LP.Team) then return true end
+                local hrp = c and c:FindFirstChild("HumanoidRootPart")
+                local hum = c and c:FindFirstChildOfClass("Humanoid")
+                if hrp and hum and hum.Health > 0 and not (F.TMTeamCheck and LP.Team and plr.Team == LP.Team) then
+                    local sp = cam:WorldToViewportPoint(hrp.Position)
+                    local d = (Vector2.new(sp.X, sp.Y) - mp).Magnitude
+                    if not bd or d < bd then bd, best = d, c end
+                end
             end
         end
-        local NPCs = workspace:FindFirstChild("NPCs")
-        if NPCs then
-            for _, m in ipairs(NPCs:GetChildren()) do
-                local r = m:FindFirstChild("HumanoidRootPart")
-                local h = m:FindFirstChildOfClass("Humanoid")
-                if r and h and h.Health > 0 and (r.Position - hrp.Position).Magnitude <= range then return true end
-            end
-        end
-        return false
+        if best then return (best:FindFirstChild(part) or best:FindFirstChild("HumanoidRootPart")) end
     end
 
-    -- trae los soldados (clientside) al punto de cluster -> KnifeFire (daño clientside desde la tool) los mata.
-    -- Method 1 "To Me" = en tu pos. Method 2 "Cluster Far" = lejos (arriba) + mueve el Handle del knife alla
-    -- (el daño sale de la tool) = no estorba la vista + full sigilo (el knife no swingea en tu mano).
-    local function gatherSoldiers(range, knifeTool)
-        local NPCs = workspace:FindFirstChild("NPCs"); if not NPCs then return end
-        local hrp = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
-        if not hrp then return end
-        local myPos = hrp.Position -- el hook __index devuelve tu pos REAL aunque estes void-spoofed
-        local center = myPos
-        if F.MeleeGatherMethod == "Cluster Far" then
-            center = myPos + Vector3.new(0, F.MeleeClusterDist or 300, 0) -- arriba, fuera de vista
-            local handle = knifeTool and knifeTool:FindFirstChild("Handle")
-            if handle then pcall(function() handle.CFrame = CFrame.new(center) end) end -- grip clientside al cluster
+    -- GRIP DECOUPLE: desconecta el grip weld + ancla el Handle. Guarda/restaura estado. NO toca el cuerpo.
+    local gS = { weld = nil, enabled = nil, anchored = nil, massless = nil }
+    local function gripWeld(handle)
+        local char = LP.Character; if not char then return end
+        local hand = char:FindFirstChild("RightHand") or char:FindFirstChild("Right Arm")
+        if not hand then return end
+        for _, w in ipairs(hand:GetChildren()) do
+            if (w:IsA("Weld") or w:IsA("Motor6D")) and (w.Part1 == handle or w.Part0 == handle) then return w end
         end
-        for _, m in ipairs(NPCs:GetChildren()) do
-            local r = m:FindFirstChild("HumanoidRootPart")
-            local h = m:FindFirstChildOfClass("Humanoid")
-            if r and h and h.Health > 0 and (r.Position - myPos).Magnitude <= range then
-                pcall(function() r.CFrame = CFrame.new(center) end)
-            end
+    end
+    local function grabHandle(tool)
+        local handle = tool:FindFirstChild("Handle"); if not handle then return end
+        local w = gripWeld(handle)
+        if w and gS.weld ~= w then gS.weld, gS.enabled = w, w.Enabled end
+        if w then pcall(function() w.Enabled = false end) end
+        if gS.anchored == nil then gS.anchored, gS.massless = handle.Anchored, handle.Massless end
+        pcall(function() handle.Anchored = true; handle.Massless = true; handle.CanCollide = false end)
+        return handle
+    end
+    local function restoreHandle()
+        local tool = meleeTool()
+        local handle = tool and tool:FindFirstChild("Handle")
+        if handle and gS.anchored ~= nil then
+            pcall(function() handle.Anchored = gS.anchored; handle.Massless = gS.massless end)
         end
+        if gS.weld and gS.weld.Parent then pcall(function() gS.weld.Enabled = gS.enabled end) end
+        gS = { weld = nil, enabled = nil, anchored = nil, massless = nil }
     end
 
     local acc = 0
     local wasActive = false
     local driver = RunService.Heartbeat:Connect(function(dt)
-        if not (F.MeleeAura == true) then
-            if wasActive then wasActive = false; pcall(Spoof.stop) end
+        if not (F.TMelee == true) then
+            if wasActive then wasActive = false; restoreHandle(); pcall(Spoof.stop) end
             return
         end
-        local k = (F.MeleeAutoEquip ~= false and equipKnife()) or knife()
-        if not k then return end
-        -- void spoof (server-pos intocable; el daño clientside usa tu pos real via el restore del hook)
-        if F.MeleeVoidSpoof ~= false then Spoof.desyncTo(voidCF(), false) end
-        if F.MeleeGather then gatherSoldiers(F.MeleeGatherRange or 500, k) end
+        local tool = (F.TMAutoEquip ~= false and equipMelee()) or meleeTool()
+        if not tool then return end
+        local tpart = nearestToMouse()
+        if not tpart then restoreHandle(); return end
+        if F.TMVoidSpoof ~= false then Spoof.desyncTo(voidCF(), false) end
+        local handle = grabHandle(tool)                                   -- decouple + anchor
+        if handle then pcall(function() handle.CFrame = CFrame.new(tpart.Position) end) end -- arma al target
         wasActive = true
         acc = acc + dt
-        local interval = math.max(F.MeleeRate or 0.7, 0.1)
+        local interval = math.max(F.TMRate or 0.5, 0.1)
         if acc < interval then return end
         acc = 0
-        if F.MeleeOnlyWithTarget and not targetInRange(F.MeleeRange or 25) then return end
-        local kf = k:FindFirstChild("KnifeFire")
-        if kf then pcall(function() kf:FireServer() end) end
+        local fr = fireRemote(tool)
+        if fr then pcall(function() fr:FireServer() end) end
     end)
 
     if U.Registry then
-        U.Registry.Add("MeleeAura", { Unload = function()
+        U.Registry.Add("TargetMelee", { Unload = function()
             if driver then driver:Disconnect() end
+            pcall(restoreHandle)
             pcall(Spoof.stop)
         end })
     end
@@ -4077,6 +4083,7 @@ return function(U)
                 else
                     task.wait(0.3)
                 end
+                task.wait(0.1) -- SIEMPRE espera por scan: evita busy-spin cuando no quedan crates = lag/crash
             end
             state.running = false
         end)
@@ -4090,6 +4097,126 @@ return function(U)
         U.Registry.Add("CrateFarm", { Unload = function()
             state.alive = false
             if watch then watch:Disconnect() end
+        end })
+    end
+end
+
+end)(); __m(U) end
+-- ==== modules/tycoon/SoldierFarm ====
+do local __m = (function()
+-- MeleeAura: melee farm hit-safe. Un toggle: (auto-)equip melee + void spoof (unhittable) + gather nearest
+-- pocos a rango del tool (CanCollide=false = sin fling) + spam del fire remote. Fire = single-target (mata 1/swing).
+-- Weapon select (Knife/Katana). Fire remote generico = el RemoteEvent del tool != PlayerCheck (KnifeFire/KatanaFire).
+-- Soldados = clientside (daño en tu pos real). Avatar mini = hitbox chica -> traer soldados mas cerca (GatherDist).
+return function(U)
+    local Players    = game:GetService("Players")
+    local RunService = game:GetService("RunService")
+    local Tab = U.Tabs.Tycoon
+    local F = U.Flags
+    local LP = Players.LocalPlayer
+    local Spoof = U.Services.Spoof
+
+    local Sec = Tab:AddSection("Soldier Farm", "Knife/Katana farm unhittable (void + gather)")
+    local Pan = Sec:AddPanel("Soldier Farm", { Column = 1 })
+    Pan:AddLabel("Master", { Header = true })
+    Pan:AddToggle("MeleeAura", { Text = "Enabled", Default = false,
+        Tooltip = "Todo-en-uno: equip + void spoof + gather + fire" })
+        :AddKeybind({ Default = Enum.KeyCode.V })
+    Pan:AddDropdown("MeleeWeapon", { Text = "Weapon", Values = { "Knife", "Katana" }, Default = "Knife" })
+    Pan:AddToggle("MeleeAutoEquip", { Text = "Auto-Equip", Default = true, Tooltip = "Off = equipas el melee vos" })
+    Pan:AddToggle("MeleeVoidSpoof", { Text = "Void Spoof (unhittable)", Default = true })
+    Pan:AddLabel("Gather", { Header = true })
+    Pan:AddToggle("MeleeGather", { Text = "Gather Soldiers", Default = true,
+        Tooltip = "Trae nearest a rango del tool (CanCollide off = sin fling)" })
+    Pan:AddSlider("MeleeGatherCount", { Text = "Gather Count", Min = 1, Max = 8, Default = 3, Suffix = "npc" })
+    Pan:AddSlider("MeleeGatherDist", { Text = "Distance To Tool", Min = 0, Max = 12, Default = 2, Decimals = 1, Suffix = "studs",
+        Tooltip = "Que tan cerca traer los soldados (avatar mini = mas cerca)" })
+    Pan:AddSlider("MeleeRange", { Text = "Search Range", Min = 20, Max = 1000, Default = 300, Suffix = "studs" })
+    Pan:AddSlider("MeleeRate", { Text = "Swing Interval", Min = 0.1, Max = 1, Default = 0.5, Decimals = 2, Suffix = "s" })
+
+    local brng = 135797531
+    local function rnd() brng = (brng * 1103515245 + 12345) % 2147483648; return brng / 2147483648 end
+    local function rndS() return rnd() * 2 - 1 end
+    local function voidCF()
+        local B = 2147483647
+        local y = math.abs(rndS() * B); if y < 30 then y = 30 + y end
+        return CFrame.new(rndS() * B, y, rndS() * B)
+    end
+
+    local function meleeTool()
+        local name = F.MeleeWeapon or "Knife"
+        for _, src in ipairs({ LP.Character, LP:FindFirstChildOfClass("Backpack") }) do
+            if src then local t = src:FindFirstChild(name); if t and t:IsA("Tool") then return t end end
+        end
+    end
+    local function equipMelee()
+        local char = LP.Character; local t = meleeTool()
+        if char and t and t.Parent ~= char then
+            local h = char:FindFirstChildOfClass("Humanoid")
+            if h then pcall(function() h:EquipTool(t) end) end
+        end
+        return char and char:FindFirstChild(F.MeleeWeapon or "Knife")
+    end
+    -- fire remote generico: el RemoteEvent del tool que no es PlayerCheck (KnifeFire / KatanaFire / etc)
+    local function fireRemote(tool)
+        for _, c in ipairs(tool:GetChildren()) do
+            if c:IsA("RemoteEvent") and c.Name ~= "PlayerCheck" then return c end
+        end
+    end
+
+    local function nearestSoldiers(count, range)
+        local NPCs = workspace:FindFirstChild("NPCs")
+        local hrp = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
+        if not (NPCs and hrp) then return {} end
+        local list = {}
+        for _, m in ipairs(NPCs:GetChildren()) do
+            local r = m:FindFirstChild("HumanoidRootPart")
+            local h = m:FindFirstChildOfClass("Humanoid")
+            if r and h and h.Health > 0 then
+                local d = (r.Position - hrp.Position).Magnitude
+                if d <= range then list[#list + 1] = { m = m, r = r, d = d } end
+            end
+        end
+        table.sort(list, function(a, b) return a.d < b.d end)
+        while #list > count do table.remove(list) end
+        return list
+    end
+    local function gather(count, range, dist)
+        local hrp = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
+        if not hrp then return end
+        local point = hrp.Position + hrp.CFrame.LookVector * dist
+        for _, e in ipairs(nearestSoldiers(count, range)) do
+            pcall(function()
+                for _, p in ipairs(e.m:GetChildren()) do if p:IsA("BasePart") then p.CanCollide = false end end
+                e.r.CFrame = CFrame.new(point)
+            end)
+        end
+    end
+
+    local acc = 0
+    local wasActive = false
+    local driver = RunService.Heartbeat:Connect(function(dt)
+        if not (F.MeleeAura == true) then
+            if wasActive then wasActive = false; pcall(Spoof.stop) end
+            return
+        end
+        local tool = (F.MeleeAutoEquip ~= false and equipMelee()) or meleeTool()
+        if not tool then return end
+        if F.MeleeVoidSpoof ~= false then Spoof.desyncTo(voidCF(), false) end
+        if F.MeleeGather ~= false then gather(math.floor(F.MeleeGatherCount or 3), F.MeleeRange or 300, F.MeleeGatherDist or 2) end
+        wasActive = true
+        acc = acc + dt
+        local interval = math.max(F.MeleeRate or 0.5, 0.1)
+        if acc < interval then return end
+        acc = 0
+        local fr = fireRemote(tool)
+        if fr then pcall(function() fr:FireServer() end) end
+    end)
+
+    if U.Registry then
+        U.Registry.Add("SoldierFarm", { Unload = function()
+            if driver then driver:Disconnect() end
+            pcall(Spoof.stop)
         end })
     end
 end
