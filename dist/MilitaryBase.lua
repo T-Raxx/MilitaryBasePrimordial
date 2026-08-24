@@ -3689,12 +3689,12 @@ return function(U)
 end
 
 end)(); __m(U) end
--- ==== modules/combat/SilentAim ====
+-- ==== modules/combat/TargetGun ====
 do local __m = (function()
--- SilentAim: hookea MouseEvent:FireServer y reescribe la pos al TARGET (nearest-to-mouse, SIN FOV check) +
--- prediccion (lead = dist/BulletSpeed * (Base+Amp)). Riddea tu fire real (con Autofire = auto-aim-fire ragebot).
--- Hook unico reload-safe (getgenv().__MBT_SA_HOOK); el load actual publica su handler en getgenv().__MBT_SA.
--- El server valida la pos vs tu posicion -> el usuario testea si registra (redirect off-aim historicamente rechazado).
+-- TargetGun: ragebot gun "inventado" pa' el juego. El silent redirect muere (server valida la pos del fire).
+-- Truco: en vez de redirigir el tiro (rechazado), GATHER el target ENFRENTE de tu camara + fire MouseEvent al
+-- crosshair-forward (raycast camara = pos VALIDA que pega al target ahi). No es redirect -> el server acepta.
+-- Si el gun daña clientside como el melee -> registra. Experimental (el user testea). FF/team check.
 return function(U)
     local Players    = game:GetService("Players")
     local RunService = game:GetService("RunService")
@@ -3703,132 +3703,97 @@ return function(U)
     local F = U.Flags
     local LP = Players.LocalPlayer
 
-    local Sec = Combat:AddSection("Silent Aim", "Redirige tu tiro al target (sin FOV) + prediccion")
-    local Pan = Sec:AddPanel("Silent Aim", { Column = 1 })
+    local Sec = Combat:AddSection("Target Gun", "Ragebot gun: gather target + fire (experimental)")
+    local Pan = Sec:AddPanel("Target Gun", { Column = 1 })
     Pan:AddLabel("Master", { Header = true })
-    Pan:AddToggle("SilentAim", { Text = "Enabled", Default = false,
-        Tooltip = "Reescribe la pos de tu MouseEvent al target. Sin FOV. Combinar con Autofire" })
-        :AddKeybind({ Default = Enum.KeyCode.K })
-    Pan:AddDropdown("SilentSelect", { Text = "Selection", Values = { "Nearest Mouse", "Nearest Distance", "Lowest HP" }, Default = "Nearest Mouse" })
-    Pan:AddDropdown("SilentHitbox", { Text = "Hitbox", Values = { "Head", "HumanoidRootPart", "UpperTorso" }, Default = "Head" })
-    Pan:AddLabel("Prediction", { Header = true })
-    Pan:AddToggle("SilentPredict", { Text = "Prediction", Default = true, Tooltip = "Lead = dist/BulletSpeed * (Base+Amp)" })
-    Pan:AddTextBox("SilentPredBase", { Text = "Predict Base", Numeric = true, Default = "1.00000" })
-    Pan:AddTextBox("SilentPredAmp", { Text = "Predict Amplitude", Numeric = true, Default = "0.00000" })
-    Pan:AddLabel("Filters", { Header = true })
-    Pan:AddToggle("SilentTeamCheck", { Text = "Team Check", Default = false })
-    Pan:AddToggle("SilentFFCheck", { Text = "ForceField Check", Default = true })
-    Pan:AddToggle("SilentVisible", { Text = "Visible Check", Default = false })
+    Pan:AddToggle("TGun", { Text = "Enabled", Default = false,
+        Tooltip = "Trae el target enfrente + dispara al crosshair (pos valida). Rapidfire" })
+        :AddKeybind({ Default = Enum.KeyCode.N })
+    Pan:AddToggle("TGunTeamCheck", { Text = "Team Check", Default = false })
+    Pan:AddToggle("TGunFFCheck", { Text = "ForceField Check", Default = true })
+    Pan:AddSlider("TGunDist", { Text = "Front Distance", Min = 3, Max = 30, Default = 8, Suffix = "studs",
+        Tooltip = "Que tan enfrente de tu camara traer el target" })
+    Pan:AddSlider("TGunRate", { Text = "Fire Interval", Min = 0.05, Max = 1, Default = 0.1, Decimals = 2, Suffix = "s",
+        Tooltip = "0 = usa FireRate del arma. Muy rapido puede lockear" })
+    Pan:AddToggle("TGunUseWeaponRate", { Text = "Use Weapon FireRate", Default = true })
 
-    -- velocidad por player (2 samples)
-    local vhist = {}
-    local velConn = RunService.Heartbeat:Connect(function()
-        local now = os.clock()
-        for _, plr in ipairs(Players:GetPlayers()) do
-            if plr ~= LP then
-                local c = plr.Character
-                local r = c and c:FindFirstChild("HumanoidRootPart")
-                if r then
-                    local h = vhist[plr]
-                    if not h then vhist[plr] = { p = r.Position, t = now, v = Vector3.zero }
-                    else local dt = now - h.t; if dt > 1e-3 then h.v = (r.Position - h.p) / dt; h.p = r.Position; h.t = now end end
-                end
+    -- gun equipado = Tool con MouseEvent + Configuration.BulletSpeed (los melee NO tienen BulletSpeed)
+    local function equippedGun()
+        local char = LP.Character
+        if not char then return end
+        for _, t in ipairs(char:GetChildren()) do
+            if t:IsA("Tool") and t:FindFirstChild("MouseEvent") then
+                local cfg = t:FindFirstChild("Configuration")
+                if cfg and cfg:FindFirstChild("BulletSpeed") then return t end
             end
         end
-    end)
-    local function targetVel(plr) local h = vhist[plr]; return h and h.v or Vector3.zero end
+    end
 
-    -- target = player por Selection (Nearest Mouse SIN check offscreen / Nearest Distance / Lowest HP)
-    local function pickTarget()
+    local function nearestToMouse()
         local cam = workspace.CurrentCamera
         local mp = UIS:GetMouseLocation()
-        local mode = F.SilentSelect or "Nearest Mouse"
-        local part = F.SilentHitbox or "Head"
-        local best, bestScore, bestPlr
+        local best, bd
         for _, plr in ipairs(Players:GetPlayers()) do
             if plr ~= LP then
                 local c = plr.Character
                 local hrp = c and c:FindFirstChild("HumanoidRootPart")
                 local hum = c and c:FindFirstChildOfClass("Humanoid")
-                local ff = F.SilentFFCheck ~= false and c and c:FindFirstChildOfClass("ForceField")
-                if hrp and hum and hum.Health > 0 and not ff and not (F.SilentTeamCheck and LP.Team and plr.Team == LP.Team) then
-                    local score
-                    if mode == "Nearest Distance" then
-                        score = cam and (cam.CFrame.Position - hrp.Position).Magnitude or 0
-                    elseif mode == "Lowest HP" then
-                        score = hum.Health
-                    else -- Nearest Mouse (sin FOV/offscreen)
-                        local sp = cam:WorldToViewportPoint(hrp.Position)
-                        score = (Vector2.new(sp.X, sp.Y) - mp).Magnitude
-                    end
-                    if not bestScore or score < bestScore then
-                        bestScore = score; bestPlr = plr; best = c:FindFirstChild(part) or hrp
-                    end
+                local ff = F.TGunFFCheck ~= false and c and c:FindFirstChildOfClass("ForceField")
+                if hrp and hum and hum.Health > 0 and not ff and not (F.TGunTeamCheck and LP.Team and plr.Team == LP.Team) then
+                    local sp = cam:WorldToViewportPoint(hrp.Position)
+                    local d = (Vector2.new(sp.X, sp.Y) - mp).Magnitude
+                    if not bd or d < bd then bd, best = d, c end
                 end
             end
         end
-        return best, bestPlr
+        return best
     end
 
-    local function predictedPos(remote)
-        local target, plr = pickTarget()
-        if not target then return nil end
-        local base = target.Position
-        if F.SilentVisible then
-            local cam = workspace.CurrentCamera; local origin = cam and cam.CFrame.Position
-            if origin then
-                local rp = RaycastParams.new(); rp.FilterType = Enum.RaycastFilterType.Exclude
-                rp.FilterDescendantsInstances = { LP.Character, cam }
-                local res = workspace:Raycast(origin, base - origin, rp)
-                if res and res.Instance and plr and plr.Character and not res.Instance:IsDescendantOf(plr.Character) then return nil end
-            end
-        end
-        if F.SilentPredict then
-            local weapon = remote.Parent
-            local speed = 800
-            local cfg = weapon and weapon:FindFirstChild("Configuration")
-            if cfg and cfg:FindFirstChild("BulletSpeed") and cfg.BulletSpeed.Value > 0 then speed = cfg.BulletSpeed.Value end
-            local cam = workspace.CurrentCamera
-            local dist = cam and (cam.CFrame.Position - base).Magnitude or 0
-            local mult = (tonumber(F.SilentPredBase) or 0) + (tonumber(F.SilentPredAmp) or 0)
-            base = base + targetVel(plr) * ((speed > 0 and dist / speed or 0) * mult)
-        end
-        return base
-    end
-
-    -- handler que consulta el hook global
-    getgenv().__MBT_SA = function(remote)
-        if not F.SilentAim then return nil end
-        local parent = remote.Parent
-        if not (parent and parent:IsA("Tool") and parent:FindFirstChild("Configuration")) then return nil end
-        return predictedPos(remote)
-    end
-
-    -- hook unico (reload-safe)
-    if not getgenv().__MBT_SA_HOOK and typeof(hookmetamethod) == "function" then
-        local old
-        old = hookmetamethod(game, "__namecall", function(self, ...)
-            local h = getgenv().__MBT_SA
-            if h and typeof(self) == "Instance" and self.Name == "MouseEvent" then
-                local isSelf = (typeof(checkcaller) == "function") and checkcaller() or false
-                if not isSelf then
-                    local ok, m = pcall(getnamecallmethod)
-                    if ok and m == "FireServer" then
-                        local okh, np = pcall(h, self)
-                        if okh and typeof(np) == "Vector3" then return old(self, np) end
-                    end
-                end
-            end
-            return old(self, ...)
+    -- trae el target enfrente de la camara (CanCollide off). El fire va al crosshair -> pega al target ahi.
+    local function bringToFront(char, dist)
+        local cam = workspace.CurrentCamera
+        local thrp = char and char:FindFirstChild("HumanoidRootPart")
+        if not (cam and thrp) then return end
+        local point = cam.CFrame.Position + cam.CFrame.LookVector * dist
+        pcall(function()
+            for _, p in ipairs(char:GetChildren()) do if p:IsA("BasePart") then p.CanCollide = false end end
+            thrp.CFrame = CFrame.new(point)
         end)
-        getgenv().__MBT_SA_HOOK = true
     end
+
+    -- pos del fire = hit del raycast camara-centro (VALIDA, misma que el client legit). Pega al target enfrente.
+    local function crosshairHit(gun)
+        local cam = workspace.CurrentCamera
+        local cfg = gun:FindFirstChild("Configuration")
+        local range = (cfg and cfg:FindFirstChild("BulletRange") and cfg.BulletRange.Value) or 800
+        local ray = cam:ViewportPointToRay(cam.ViewportSize.X / 2, cam.ViewportSize.Y / 2)
+        local rp = RaycastParams.new(); rp.FilterType = Enum.RaycastFilterType.Exclude
+        rp.FilterDescendantsInstances = { LP.Character, cam }
+        local res = workspace:Raycast(ray.Origin, ray.Direction * range, rp)
+        return res and res.Position or (ray.Origin + ray.Direction * range)
+    end
+
+    local acc = 0
+    local driver = RunService.Heartbeat:Connect(function(dt)
+        if not (F.TGun == true) then acc = 0; return end
+        local gun = equippedGun()
+        if not gun then return end
+        local target = nearestToMouse()
+        if not target then return end
+        bringToFront(target, F.TGunDist or 8)
+        acc = acc + dt
+        local interval = F.TGunUseWeaponRate ~= false
+            and ((gun:FindFirstChild("Configuration") and gun.Configuration:FindFirstChild("FireRate") and gun.Configuration.FireRate.Value) or 0.2)
+            or (F.TGunRate or 0.1)
+        interval = math.max(interval, 0.05)
+        if acc < interval then return end
+        acc = 0
+        local me = gun:FindFirstChild("MouseEvent")
+        if me then pcall(function() me:FireServer(crosshairHit(gun)) end) end
+    end)
 
     if U.Registry then
-        U.Registry.Add("SilentAim", { Unload = function()
-            getgenv().__MBT_SA = nil -- desarma (hook queda inerte)
-            if velConn then velConn:Disconnect() end
-        end })
+        U.Registry.Add("TargetGun", { Unload = function() if driver then driver:Disconnect() end end })
     end
 end
 
